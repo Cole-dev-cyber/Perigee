@@ -59,6 +59,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "Perigee-guards"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "Perigee-math"
 version = "0.1.0"
 dependencies = [
@@ -1141,6 +1148,7 @@ dependencies = [
 name = "emergency_guard"
 version = "0.1.0"
 dependencies = [
+ "Perigee-guards",
  "soroban-sdk",
 ]
 
