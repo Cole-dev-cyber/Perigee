@@ -20,11 +20,22 @@ pub const SCALE: i128 = 1_000_000_000_000_000_000; // 18 decimals
 #[contracttype]
 pub enum DataKey {
     Config,
+    FeeMarketConfig,
     UserState(Address),
     TotalStaked,
 }
 
 // ── Configuration Struct ──────────────────────────────────────
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct FeeMarketConfig {
+    pub min_fee_bps: i128,
+    pub max_fee_bps: i128,
+    pub congestion_weight_bps: i128,
+    pub utilization_weight_bps: i128,
+    pub market_weight_bps: i128,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
@@ -256,7 +267,16 @@ impl StakingRewards {
             is_paused: false,
         };
 
+        let fee_market = FeeMarketConfig {
+            min_fee_bps: 0,
+            max_fee_bps: 10_000,
+            congestion_weight_bps: 30,
+            utilization_weight_bps: 40,
+            market_weight_bps: 30,
+        };
+
         e.storage().instance().set(&DataKey::Config, &config);
+        e.storage().instance().set(&DataKey::FeeMarketConfig, &fee_market);
         e.storage().instance().set(&DataKey::TotalStaked, &0i128);
         e.storage().instance().extend_ttl(10000, 10000);
 
@@ -673,6 +693,166 @@ impl StakingRewards {
             .instance()
             .get(&DataKey::Config)
             .ok_or(ContractError::NotInitialized)
+    }
+
+    /// Returns the configured fee-market adjustment bounds and weighting factors.
+    pub fn get_fee_market_config(e: Env) -> Result<FeeMarketConfig, ContractError> {
+        e.storage()
+            .instance()
+            .get(&DataKey::FeeMarketConfig)
+            .ok_or(ContractError::NotInitialized)
+    }
+
+    /// Allows governance to set the min/max effective fee bounds used for dynamic
+    /// fee adjustments. The min bound cannot exceed the max bound, both are capped
+    /// to the protocol's configured fee scale (10000 bps = 100%).
+    pub fn set_fee_market_bounds(
+        e: Env,
+        min_fee_bps: i128,
+        max_fee_bps: i128,
+    ) -> Result<(), ContractError> {
+        let config = Self::get_config(e.clone())?;
+        config.owner.require_auth();
+
+        if min_fee_bps < 0 || max_fee_bps < 0 || max_fee_bps < min_fee_bps {
+            return Err(ContractError::InvalidInput);
+        }
+
+        let max_fee_cap: i128 = 10_000;
+        if min_fee_bps > max_fee_cap || max_fee_bps > max_fee_cap {
+            return Err(ContractError::InvalidInput);
+        }
+
+        let mut market = e
+            .storage()
+            .instance()
+            .get(&DataKey::FeeMarketConfig)
+            .unwrap_or(FeeMarketConfig {
+                min_fee_bps: 0,
+                max_fee_bps: max_fee_cap,
+                congestion_weight_bps: 30,
+                utilization_weight_bps: 40,
+                market_weight_bps: 30,
+            });
+
+        market.min_fee_bps = min_fee_bps;
+        market.max_fee_bps = max_fee_bps;
+        e.storage().instance().set(&DataKey::FeeMarketConfig, &market);
+        Ok(())
+    }
+
+    /// Computes a dynamically-adjusted fee rate using network congestion,
+    /// vault utilization, and macro market conditions. Value is clamped to the
+    /// governance-configured bounds.
+    pub fn calculate_dynamic_fee(
+        e: Env,
+        base_fee_bps: i128,
+        network_congestion_bps: i128,
+        vault_utilization_bps: i128,
+        market_conditions_bps: i128,
+    ) -> Result<i128, ContractError> {
+        if base_fee_bps < 0
+            || network_congestion_bps < 0
+            || vault_utilization_bps < 0
+            || market_conditions_bps < 0
+        {
+            return Err(ContractError::InvalidInput);
+        }
+
+        let market = e
+            .storage()
+            .instance()
+            .get(&DataKey::FeeMarketConfig)
+            .unwrap_or(FeeMarketConfig {
+                min_fee_bps: 0,
+                max_fee_bps: 10_000,
+                congestion_weight_bps: 30,
+                utilization_weight_bps: 40,
+                market_weight_bps: 30,
+            });
+
+        let congestion_adjustment = market
+            .congestion_weight_bps
+            .checked_mul(network_congestion_bps)
+            .ok_or(ContractError::Overflow)?
+            / 10_000;
+        let utilization_adjustment = market
+            .utilization_weight_bps
+            .checked_mul(vault_utilization_bps)
+            .ok_or(ContractError::Overflow)?
+            / 10_000;
+        let market_adjustment = market
+            .market_weight_bps
+            .checked_mul(market_conditions_bps)
+            .ok_or(ContractError::Overflow)?
+            / 10_000;
+
+        let effective = base_fee_bps
+            .checked_add(congestion_adjustment)
+            .and_then(|v| v.checked_add(utilization_adjustment))
+            .and_then(|v| v.checked_add(market_adjustment))
+            .ok_or(ContractError::Overflow)?;
+
+        let bounded = if effective < market.min_fee_bps {
+            market.min_fee_bps
+        } else if effective > market.max_fee_bps {
+            market.max_fee_bps
+        } else {
+            effective
+        };
+
+        Ok(bounded)
+    }
+
+    /// Convenience wrapper for governance to update the weighting profile at the
+    /// same time as the fee bounds. This keeps the market model fully configurable.
+    pub fn configure_fee_market(
+        e: Env,
+        min_fee_bps: i128,
+        max_fee_bps: i128,
+        congestion_weight_bps: i128,
+        utilization_weight_bps: i128,
+        market_weight_bps: i128,
+    ) -> Result<(), ContractError> {
+        let config = Self::get_config(e.clone())?;
+        config.owner.require_auth();
+
+        if congestion_weight_bps < 0
+            || utilization_weight_bps < 0
+            || market_weight_bps < 0
+            || congestion_weight_bps + utilization_weight_bps + market_weight_bps > 10_000
+        {
+            return Err(ContractError::InvalidInput);
+        }
+
+        let mut market = e
+            .storage()
+            .instance()
+            .get(&DataKey::FeeMarketConfig)
+            .unwrap_or(FeeMarketConfig {
+                min_fee_bps: 0,
+                max_fee_bps: 10_000,
+                congestion_weight_bps: 30,
+                utilization_weight_bps: 40,
+                market_weight_bps: 30,
+            });
+
+        market.min_fee_bps = min_fee_bps;
+        market.max_fee_bps = max_fee_bps;
+        market.congestion_weight_bps = congestion_weight_bps;
+        market.utilization_weight_bps = utilization_weight_bps;
+        market.market_weight_bps = market_weight_bps;
+
+        if market.min_fee_bps > market.max_fee_bps {
+            return Err(ContractError::InvalidInput);
+        }
+
+        if market.min_fee_bps < 0 || market.max_fee_bps < 0 || market.max_fee_bps > 10_000 {
+            return Err(ContractError::InvalidInput);
+        }
+
+        e.storage().instance().set(&DataKey::FeeMarketConfig, &market);
+        Ok(())
     }
 
     // ── Internal Helpers ────────────────────────────────────────
