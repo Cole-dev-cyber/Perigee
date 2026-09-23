@@ -26,6 +26,235 @@ use soroban_sdk::{Address, Env, Vec};
 pub use Perigee_guards::*;
 /// Backward-compatible name for the canonical [`Guard`] core.
 pub use Perigee_guards::Guard as DefaultEmergencyGuard;
+/// Granular pause types using bitmask for efficient storage
+#[contracttype]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PauseType(u32);
+
+impl PauseType {
+    pub const SWAP: u32 = 1 << 0;
+    pub const DEPOSIT: u32 = 1 << 1;
+    pub const WITHDRAW: u32 = 1 << 2;
+    pub const TRANSFER: u32 = 1 << 3;
+    pub const MINT: u32 = 1 << 4;
+    pub const BURN: u32 = 1 << 5;
+    pub const CREATE_PAIR: u32 = 1 << 6;
+    /// Pause staking operations
+    pub const STAKE: u32 = 1 << 7;
+    /// Pause reward claims on the staking rewards contract.
+    pub const CLAIM_REWARDS: u32 = 1 << 8;
+    /// Pause metadata URI writes and cache invalidation.
+    pub const METADATA: u32 = 1 << 9;
+
+    pub fn new(value: u32) -> Self {
+        PauseType(value)
+    }
+
+    /// Returns true if `operation` bit is set in the pause bitmask.
+    /// `#[inline(always)]` ensures this reduces to a single AND + comparison
+    /// instruction at the call site, minimising gas on every guard check.
+    #[inline(always)]
+    pub fn is_paused(&self, operation: u32) -> bool {
+        (self.0 & operation) != 0
+    }
+
+    #[inline(always)]
+    pub fn set_paused(&mut self, operation: u32, paused: bool) {
+        if paused {
+            self.0 |= operation;
+        } else {
+            self.0 &= !operation;
+        }
+    }
+
+    pub fn pause_all(&mut self) {
+        self.0 = u32::MAX;
+    }
+
+    pub fn unpause_all(&mut self) {
+        self.0 = 0;
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+}
+
+/// Data keys for emergency guard storage
+#[contracttype]
+pub enum GuardDataKey {
+    PauseState,
+    Admins,
+    SignatureThreshold,
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[repr(u32)]
+pub enum GuardError {
+    NotInitialized = 0,
+    Unauthorized = 1,
+    Paused = 2,
+    InsufficientSignatures = 3,
+    InvalidThreshold = 4,
+    AdminNotFound = 5,
+    AlreadyInitialized = 6,
+}
+
+/// Standardized event actions emitted by every successful guard action.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum EmergencyGuardAction {
+    Initialized,
+    PauseSet,
+    EmergencyPause,
+    Resume,
+    AdminAdded,
+    AdminRemoved,
+    AdminRotated,
+}
+
+/// Standardized event payload for EmergencyGuard administrative actions.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmergencyGuardEvent {
+    pub action: EmergencyGuardAction,
+    pub admin: Option<Address>,
+    pub operation: u32,
+    pub paused: bool,
+    pub threshold: u32,
+    pub admin_count: u32,
+    pub approver_count: u32,
+}
+
+fn action_topic(env: &Env, action: EmergencyGuardAction) -> String {
+    match action {
+        EmergencyGuardAction::Initialized => String::from_str(env, "initialized"),
+        EmergencyGuardAction::PauseSet => String::from_str(env, "pause_set"),
+        EmergencyGuardAction::EmergencyPause => String::from_str(env, "emergency_pause"),
+        EmergencyGuardAction::Resume => String::from_str(env, "resume"),
+        EmergencyGuardAction::AdminAdded => String::from_str(env, "admin_added"),
+        EmergencyGuardAction::AdminRemoved => String::from_str(env, "admin_removed"),
+        EmergencyGuardAction::AdminRotated => String::from_str(env, "admin_rotated"),
+    }
+}
+
+fn emit_guard_event(env: &Env, event: EmergencyGuardEvent) {
+    env.events().publish(
+        (
+            String::from_str(env, "EmergencyGuard"),
+            action_topic(env, event.action),
+        ),
+        event,
+    );
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GuardInitializedEvent {
+    pub admins: Vec<Address>,
+    pub threshold: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PauseStateChangedEvent {
+    pub admin: Address,
+    pub operation: u32,
+    pub paused: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmergencyPausedEvent {
+    pub approvers: Vec<Address>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResumedEvent {
+    pub approvers: Vec<Address>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminAddedEvent {
+    pub approvers: Vec<Address>,
+    pub new_admin: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminRemovedEvent {
+    pub approvers: Vec<Address>,
+    pub admin: Address,
+}
+
+const EVENT_INIT_GUARD: &str = "emergency_guard_initialized";
+const EVENT_SET_PAUSE: &str = "emergency_guard_pause_state_changed";
+const EVENT_EMERGENCY_PAUSE_ALL: &str = "emergency_guard_emergency_paused_all";
+const EVENT_RESUME_ALL: &str = "emergency_guard_resumed_all";
+const EVENT_ADD_ADMIN: &str = "emergency_guard_admin_added";
+const EVENT_REMOVE_ADMIN: &str = "emergency_guard_admin_removed";
+
+pub fn emit_guard_initialized(e: &Env, admins: &Vec<Address>, threshold: u32) {
+    e.events().publish(
+        (String::from_str(e, EVENT_INIT_GUARD),),
+        GuardInitializedEvent {
+            admins: admins.clone(),
+            threshold,
+        },
+    );
+}
+
+pub fn emit_pause_state_changed(e: &Env, admin: &Address, operation: u32, paused: bool) {
+    e.events().publish(
+        (String::from_str(e, EVENT_SET_PAUSE), admin.clone()),
+        PauseStateChangedEvent {
+            admin: admin.clone(),
+            operation,
+            paused,
+        },
+    );
+}
+
+pub fn emit_emergency_paused_all(e: &Env, approvers: &Vec<Address>) {
+    e.events().publish(
+        (String::from_str(e, EVENT_EMERGENCY_PAUSE_ALL),),
+        EmergencyPausedEvent {
+            approvers: approvers.clone(),
+        },
+    );
+}
+
+pub fn emit_resumed_all(e: &Env, approvers: &Vec<Address>) {
+    e.events().publish(
+        (String::from_str(e, EVENT_RESUME_ALL),),
+        ResumedEvent {
+            approvers: approvers.clone(),
+        },
+    );
+}
+
+pub fn emit_admin_added(e: &Env, approvers: &Vec<Address>, new_admin: &Address) {
+    e.events().publish(
+        (String::from_str(e, EVENT_ADD_ADMIN), new_admin.clone()),
+        AdminAddedEvent {
+            approvers: approvers.clone(),
+            new_admin: new_admin.clone(),
+        },
+    );
+}
+
+pub fn emit_admin_removed(e: &Env, approvers: &Vec<Address>, admin: &Address) {
+    e.events().publish(
+        (String::from_str(e, EVENT_REMOVE_ADMIN), admin.clone()),
+        AdminRemovedEvent {
+            approvers: approvers.clone(),
+            admin: admin.clone(),
+        },
+    );
+}
 
 #[cfg_attr(feature = "contract", contract)]
 pub struct EmergencyGuard;
