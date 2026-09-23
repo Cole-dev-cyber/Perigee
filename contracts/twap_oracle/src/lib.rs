@@ -21,11 +21,34 @@ pub enum Error {
 pub enum DataKey {
     TokenA,
     TokenB,
-    CumulativePrice,
-    TotalTime,
-    LastUpdateTimestamp,
-    LastPrice,
     MinUpdateIntervalSeconds,
+    /// Single instance key holding the whole TWAP accumulator state.
+    ///
+    /// Replaces the four separate `CumulativePrice` / `TotalTime` /
+    /// `LastUpdateTimestamp` / `LastPrice` keys: `update_price` now performs
+    /// one read + one write of instance storage instead of four.
+    State,
+}
+
+/// The TWAP accumulator, packed into a single instance-storage entry.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TwapStorage {
+    pub cumulative_price: i128,
+    pub total_time: u64,
+    pub last_update_timestamp: u64,
+    pub last_price: i128,
+}
+
+impl Default for TwapStorage {
+    fn default() -> Self {
+        Self {
+            cumulative_price: 0,
+            total_time: 0,
+            last_update_timestamp: 0,
+            last_price: 0,
+        }
+    }
 }
 
 pub trait PriceOracle {
@@ -60,11 +83,9 @@ impl TwapOracle {
         }
         e.storage().instance().set(&DataKey::TokenA, &token_a);
         e.storage().instance().set(&DataKey::TokenB, &token_b);
-        e.storage().instance().set(&DataKey::CumulativePrice, &0i128);
-        e.storage().instance().set(&DataKey::TotalTime, &0u64);
-        e.storage().instance().set(&DataKey::LastUpdateTimestamp, &0u64);
-        e.storage().instance().set(&DataKey::LastPrice, &0i128);
         e.storage().instance().set(&DataKey::MinUpdateIntervalSeconds, &min_update_interval_seconds);
+        // One write for the whole accumulator state.
+        e.storage().instance().set(&DataKey::State, &TwapStorage::default());
         Ok(())
     }
 
@@ -89,25 +110,31 @@ impl TwapOracle {
         }
 
         let now = e.ledger().timestamp();
-        let last_update: u64 = e.storage().instance().get(&DataKey::LastUpdateTimestamp).unwrap_or(0);
-        let min_interval: u64 = e.storage().instance().get(&DataKey::MinUpdateIntervalSeconds).unwrap_or(0);
+        let mut state = Self::read_state(&e);
+        let min_interval: u64 = e
+            .storage()
+            .instance()
+            .get(&DataKey::MinUpdateIntervalSeconds)
+            .unwrap_or(0);
 
-        if last_update > 0 && now - last_update < min_interval {
+        if state.last_update_timestamp > 0
+            && now - state.last_update_timestamp < min_interval
+        {
             return Err(Error::InsufficientTimeElapsed);
         }
 
-        let last_price: i128 = e.storage().instance().get(&DataKey::LastPrice).unwrap_or(0);
-        let cumulative: i128 = e.storage().instance().get(&DataKey::CumulativePrice).unwrap_or(0);
-        let total_time: u64 = e.storage().instance().get(&DataKey::TotalTime).unwrap_or(0);
+        let elapsed = if state.last_update_timestamp == 0 {
+            0
+        } else {
+            now - state.last_update_timestamp
+        };
+        state.cumulative_price += state.last_price * elapsed as i128;
+        state.total_time += elapsed;
+        state.last_update_timestamp = now;
+        state.last_price = current_price;
 
-        let elapsed = if last_update == 0 { 0 } else { now - last_update };
-        let new_cumulative = cumulative + last_price * elapsed as i128;
-        let new_total_time = total_time + elapsed;
-
-        e.storage().instance().set(&DataKey::CumulativePrice, &new_cumulative);
-        e.storage().instance().set(&DataKey::TotalTime, &new_total_time);
-        e.storage().instance().set(&DataKey::LastUpdateTimestamp, &now);
-        e.storage().instance().set(&DataKey::LastPrice, &current_price);
+        // One write for the whole accumulator state.
+        Self::write_state(&e, &state);
 
         Ok(())
     }
@@ -120,12 +147,11 @@ impl TwapOracle {
     /// # Returns
     /// - The TWAP as i128, or 0 if no updates.
     pub fn get_twap(e: Env) -> i128 {
-        let cumulative: i128 = e.storage().instance().get(&DataKey::CumulativePrice).unwrap_or(0);
-        let total_time: u64 = e.storage().instance().get(&DataKey::TotalTime).unwrap_or(0);
-        if total_time == 0 {
+        let state = Self::read_state(&e);
+        if state.total_time == 0 {
             0
         } else {
-            cumulative / total_time as i128
+            state.cumulative_price / state.total_time as i128
         }
     }
 
@@ -134,6 +160,25 @@ impl TwapOracle {
         let token_a: Address = e.storage().instance().get(&DataKey::TokenA).unwrap();
         let token_b: Address = e.storage().instance().get(&DataKey::TokenB).unwrap();
         (token_a, token_b)
+    }
+
+    /// Returns the packed TWAP accumulator state.
+    pub fn get_state(e: Env) -> TwapStorage {
+        Self::read_state(&e)
+    }
+
+    /// Reads the packed accumulator state, defaulting to all zeros when the
+    /// contract is not initialized or no update has happened yet.
+    fn read_state(e: &Env) -> TwapStorage {
+        e.storage()
+            .instance()
+            .get(&DataKey::State)
+            .unwrap_or_default()
+    }
+
+    /// Writes the packed accumulator state in a single instance-storage write.
+    fn write_state(e: &Env, state: &TwapStorage) {
+        e.storage().instance().set(&DataKey::State, state);
     }
 }
 
