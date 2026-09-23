@@ -806,6 +806,9 @@ pub trait TokenEmergencyGuardTrait {
 #[cfg(test)]
 mod test;
 
+#[cfg(test)]
+mod spec;
+
 impl DefaultEmergencyGuard {
     pub fn check_not_paused(env: &Env, operation: u32) -> Result<(), GuardError> {
         if EmergencyGuard::is_paused(env.clone(), operation) {
