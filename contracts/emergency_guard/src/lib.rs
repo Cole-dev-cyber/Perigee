@@ -21,6 +21,8 @@ impl PauseType {
     pub const STAKE: u32 = 1 << 7;
     /// Pause reward claims on the staking rewards contract.
     pub const CLAIM_REWARDS: u32 = 1 << 8;
+    /// Pause metadata URI writes and cache invalidation.
+    pub const METADATA: u32 = 1 << 9;
 
     pub fn new(value: u32) -> Self {
         PauseType(value)
