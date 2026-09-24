@@ -1,5 +1,6 @@
 import type { AppProps } from "next/app";
 import "../styles/globals.css";
+import "../styles/print.css";
 import { Inter } from "next/font/google";
 import { WalletProvider } from "../context/WalletContext";
 import { ErrorBoundary } from "../components/ErrorBoundary";
@@ -29,10 +30,7 @@ const inter = Inter({
  * Resolves WEB-24 (#110): missing accessibility audit tooling.
  */
 async function initAxe() {
-  if (
-    typeof window !== "undefined" &&
-    process.env.NODE_ENV === "development"
-  ) {
+  if (typeof window !== "undefined" && process.env.NODE_ENV === "development") {
     const axe = await import("@axe-core/react");
     const React = await import("react");
     const ReactDOM = await import("react-dom");
