@@ -2,11 +2,10 @@
 
 import { useWalletStore } from "../context/WalletContext";
 import { shallow } from "../lib/createStore";
-import { motion, AnimatePresence } from "framer-motion";
-import { useWallet } from "../context/WalletContext";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useState, useRef, useEffect } from "react";
 import { LogOut } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 const ArrowDownIcon = () => (
   <svg
@@ -25,6 +24,7 @@ const ArrowDownIcon = () => (
 );
 
 export function ConnectButton() {
+  const t = useTranslations();
   const { address, openModal, disconnect } = useWalletStore(
     (s) => ({ address: s.address, openModal: s.openModal, disconnect: s.disconnect }),
     shallow,
@@ -93,7 +93,7 @@ export function ConnectButton() {
                 className="flex items-center gap-3 w-full px-4 py-3 text-red-400 hover:bg-white/5 transition-colors text-sm font-medium"
               >
                 <LogOut className="w-4 h-4" />
-                Disconnect
+                {t("connectButton.disconnect")}
               </button>
             </motion.div>
           )}
@@ -110,7 +110,7 @@ export function ConnectButton() {
       className="flex items-center gap-4"
     >
       <div className="flex items-center gap-4 px-8 py-3 rounded-s-2xl bg-[#0F1621] border border-[#1e293b] hover:border-[#33C5E0]/50 transition-all text-[#33C5E0] font-medium tracking-wide shadow-lg shadow-black/20">
-        <span>Connect Wallet</span>
+        <span>{t("connectButton.connectWallet")}</span>
         <ArrowDownIcon />
       </div>
       <div className="w-1.5 h-8 bg-[#161E22] flex items-center justify-center transition-colors" />
