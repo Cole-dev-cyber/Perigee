@@ -83,22 +83,19 @@ export default function AdminManagers() {
         </header>
 
         <section className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+          import {Button} from "../../components/ui/Button"; // ... (rest of the
+          file)
           <div className="mb-6 flex items-center gap-3">
             {["", "pending", "approved", "rejected"].map((s) => (
-              <button
+              <Button
                 key={s}
                 onClick={() => setFilter(s)}
-                className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                  filter === s
-                    ? "bg-cyan-600 text-white"
-                    : "bg-slate-800 text-slate-400 hover:bg-slate-700"
-                }`}
+                variant={filter === s ? "default" : "secondary"}
               >
                 {s || "All"}
-              </button>
+              </Button>
             ))}
           </div>
-
           {loading ? (
             <div className="flex flex-col items-center justify-center py-12">
               <div
@@ -110,12 +107,9 @@ export default function AdminManagers() {
           ) : error ? (
             <div className="rounded-lg border border-red-800 bg-red-950/40 p-4 text-center">
               <p className="text-red-400">{error}</p>
-              <button
-                onClick={loadManagers}
-                className="mt-3 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-500"
-              >
+              <Button onClick={loadManagers} className="mt-3">
                 Retry
-              </button>
+              </Button>
             </div>
           ) : managers.length === 0 ? (
             <div className="py-12 text-center">
@@ -188,20 +182,22 @@ export default function AdminManagers() {
                       <td className="px-4 py-3">
                         {m.status === "pending" && (
                           <div className="flex gap-2">
-                            <button
+                            <Button
                               onClick={() => handleApprove(m.id)}
                               disabled={actionLoading === m.id}
-                              className="rounded bg-green-700 px-3 py-1 text-xs font-medium text-white hover:bg-green-600 disabled:opacity-50 transition-colors"
+                              variant="default"
+                              size="sm"
                             >
                               {actionLoading === m.id ? "..." : "Approve"}
-                            </button>
-                            <button
+                            </Button>
+                            <Button
                               onClick={() => handleReject(m.id)}
                               disabled={actionLoading === m.id}
-                              className="rounded bg-red-700 px-3 py-1 text-xs font-medium text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
+                              variant="destructive"
+                              size="sm"
                             >
                               Reject
-                            </button>
+                            </Button>
                           </div>
                         )}
                       </td>
@@ -211,14 +207,10 @@ export default function AdminManagers() {
               </table>
             </div>
           )}
-
           <div className="mt-6">
-            <button
-              onClick={() => router.push("/")}
-              className="text-sm text-cyan-400 hover:text-cyan-300 transition-colors"
-            >
+            <Button variant="link" onClick={() => router.push("/")}>
               &larr; Back to Analyzer
-            </button>
+            </Button>
           </div>
         </section>
       </main>
