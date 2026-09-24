@@ -22,11 +22,11 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 
 const variantClasses: Record<ButtonVariant, string> = {
   primary:
-    "bg-sky-600 text-white hover:bg-sky-500 focus-visible:ring-sky-500 disabled:bg-sky-900 disabled:text-sky-400",
+    "bg-sky-700 text-white hover:bg-sky-600 focus-visible:ring-sky-500 disabled:bg-sky-900 disabled:text-sky-300",
   secondary:
     "bg-slate-700 text-slate-100 hover:bg-slate-600 focus-visible:ring-slate-500 disabled:bg-slate-800 disabled:text-slate-500",
   ghost:
-    "bg-transparent text-slate-300 hover:bg-slate-800 hover:text-slate-100 focus-visible:ring-slate-500 disabled:text-slate-600",
+    "bg-transparent text-slate-300 hover:bg-slate-800 hover:text-slate-100 focus-visible:ring-slate-500 disabled:text-slate-400",
   danger:
     "bg-rose-700 text-white hover:bg-rose-600 focus-visible:ring-rose-500 disabled:bg-rose-900 disabled:text-rose-400",
 };
