@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useCallback, useState } from "react";
-import { useDropzone, FileRejection } from "react-dropzone";
-import { parseWasmError, WasmBackendError } from "../lib/errorHandling";
-import { arrayBufferToBase64 } from "../lib/utils";
-import { API_URL } from "../lib/api";
+import React, { useCallback, useState } from 'react';
+import { useDropzone, FileRejection } from 'react-dropzone';
+import { parseWasmError, WasmBackendError } from '../lib/errorHandling';
+import { arrayBufferToBase64 } from '../lib/utils';
+import { API_URL } from '../lib/api';
+import { useTranslations } from 'next-intl';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -202,6 +203,8 @@ export function UploadZone({
   backendUrl = `${API_URL}/analyze/wasm`,
   enableBackendValidation = true,
 }: UploadZoneProps) {
+  const t = useTranslations();
+  const [uploadState, setUploadState] = useState<UploadState>('idle');
   const [uploadState, setUploadState] = useState<UploadState>("idle");
   const [droppedFile, setDroppedFile] = useState<DroppedFile | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>("");
@@ -472,6 +475,7 @@ export function UploadZone({
       ? `.${fileName.split(".").pop()}`
       : "unknown type";
     const customMessage = first?.errors?.[0]?.message;
+    const errorMsg = customMessage || t("upload.rejectedFile", { name: fileName, ext });
     const errorMsg =
       customMessage ||
       `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`;
@@ -489,6 +493,8 @@ export function UploadZone({
     const extension = file.name.split(".").pop()?.toLowerCase();
     if (extension !== "wasm") {
       return {
+        code: 'file-invalid-type',
+        message: t("upload.rejectedFile", { name: file.name, ext: `.${extension || 'unknown'}` }),
         code: "file-invalid-type",
         message: `"${file.name}" was rejected — only .wasm files are accepted (got .${extension || "unknown"})`,
       };
@@ -624,7 +630,8 @@ export function UploadZone({
             </div>
             <div className="flex items-center gap-2 mt-1 px-4 py-1.5 rounded-full bg-slate-800/70 border border-slate-700">
               <span className="w-2 h-2 rounded-full bg-sky-400" />
-              <span className="text-xs text-slate-400 font-mono">
+              <span className="text-xs text-slate-400 font-mono">{t("upload.onlyWasm")}</span>
+             
                 Only .wasm files accepted
               </span>
             </div>
@@ -714,9 +721,7 @@ export function UploadZone({
 
             <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-red-950/40 border border-red-800/50">
               <span className="w-2 h-2 rounded-full bg-red-400" />
-              <span className="text-xs text-red-400 font-mono">
-                Only .wasm files are accepted
-              </span>
+              <span className="text-xs text-red-400 font-mono">{t("upload.onlyWasm")}</span>
             </div>
 
             <button

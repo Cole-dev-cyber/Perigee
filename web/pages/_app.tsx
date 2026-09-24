@@ -60,12 +60,17 @@ export default function App({ Component, pageProps }: AppProps) {
           <WalletProvider>
             {/* Network status and API availability (#109) */}
             <NetworkStatusBanner apiUrl={API_URL} />
-            {/* Graceful RPC fallback — shown when the backend is unreachable (#115) */}
-            <RpcFallbackBanner apiUrl={API_URL} />
-            <ErrorBoundary>
-              <Component {...pageProps} />
-              <Analytics />
-            </ErrorBoundary>
+            {/*
+             * Graceful RPC fallback — shown when the backend is unreachable (#115).
+             * Wraps ErrorBoundary so children can read `useRpcFallback()` to display
+             * stale-data badges on individual views.
+             */}
+            <RpcFallbackBanner apiUrl={API_URL}>
+              <ErrorBoundary>
+                <Component {...pageProps} />
+                <Analytics />
+              </ErrorBoundary>
+            </RpcFallbackBanner>
           </WalletProvider>
         </NextIntlClientProvider>
       </FeatureFlagProvider>

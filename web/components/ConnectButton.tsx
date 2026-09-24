@@ -1,8 +1,12 @@
 "use client";
 
+import { useWalletStore } from "../context/WalletContext";
+import { shallow } from "../lib/createStore";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { LogOut } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useWalletStore } from "../context/WalletContext";
 import { shallow } from "../lib/createStore";
 import { Spinner } from "./ui/Spinner";
@@ -24,6 +28,9 @@ const ArrowDownIcon = () => (
 );
 
 export function ConnectButton() {
+  const t = useTranslations();
+  const { address, openModal, disconnect } = useWalletStore(
+    (s) => ({ address: s.address, openModal: s.openModal, disconnect: s.disconnect }),
   // Single granular subscription — only re-renders when these four values change.
   const { address, openModal, disconnect, isConnecting } = useWalletStore(
     (s) => ({
@@ -113,6 +120,9 @@ export function ConnectButton() {
                 variant="ghost"
                 className="w-full justify-start"
               >
+                <LogOut className="w-4 h-4" />
+                {t("connectButton.disconnect")}
+              </button>
                 <LogOut className="w-4 h-4 mr-2" />
                 Disconnect
               </Button>
@@ -144,6 +154,8 @@ export function ConnectButton() {
       }`}
     >
       <div className="flex items-center gap-4 px-8 py-3 rounded-s-2xl bg-[#0F1621] border border-[#1e293b] hover:border-[#33C5E0]/50 transition-all text-[#33C5E0] font-medium tracking-wide shadow-lg shadow-black/20">
+        <span>{t("connectButton.connectWallet")}</span>
+        <ArrowDownIcon />
         {isConnecting ? (
           <>
             {/* Shared Spinner component — size/color consistent with ui/Spinner */}
