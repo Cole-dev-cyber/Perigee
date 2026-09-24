@@ -11,6 +11,7 @@
 //! The engine tries local first and falls back to RPC when no WASM is
 //! loaded for the target contract or a retriable error occurs.
 
+pub mod async_bounds;
 pub mod local;
 
 pub use local::{ContractInvocation, LocalRunner};
