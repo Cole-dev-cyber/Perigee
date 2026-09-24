@@ -1,3 +1,9 @@
+// Prevent regressions: production code must not use .unwrap() or .expect().
+// The cfg_attr below exempts test code (where panicking on assertion failures
+// is idiomatic and desirable).
+#![warn(clippy::unwrap_used, clippy::expect_used)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 pub mod billing_service;
 pub mod config;
 pub mod cache;

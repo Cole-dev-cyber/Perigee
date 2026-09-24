@@ -9,3 +9,13 @@ members = [
     "contracts/staking_rewards",
     "contracts/oracle_aggregator",
 ]
+
+# CONTRACT-41 (#535): dedicated build profile used by `scripts/coverage.sh`
+# and the "Contracts — coverage" workflow. It inherits `dev` so tests behave
+# exactly as they do locally, pins line-table debug info so coverage maps back
+# to source lines, and disables incremental compilation so repeated runs
+# produce identical numbers.
+[profile.coverage]
+inherits = "dev"
+debug = 1
+incremental = false

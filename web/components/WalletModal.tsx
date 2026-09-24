@@ -9,6 +9,7 @@ import UserIcon from "./userIcon";
 import { logger } from "../lib/logger";
 import { trackTelemetryEvent } from "../lib/telemetry";
 import { useTranslations } from "next-intl";
+import { Spinner } from "./ui/Spinner";
 
 export function WalletModal() {
   const t = useTranslations("walletModal");
@@ -158,6 +159,29 @@ export function WalletModal() {
                   </span>
                 </button>
               </div>
+
+              <button
+                onClick={handleConnectClick}
+                disabled={!activeSelection || isConnecting}
+                className={`w-full py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
+                  activeSelection && !isConnecting
+                    ? "bg-[#33C5E0] hover:bg-[#33C5E0]/90 text-black"
+                    : "bg-[#2A3338] cursor-not-allowed text-gray-500"
+                }`}
+              >
+                {isConnecting ? (
+                  <>
+                    <Spinner size="sm" color="white" />
+                    <span>{t("connecting")}</span>
+                  </>
+                ) : (
+                  <>
+                    <UserIcon />
+                    <span>{t("connectButton")}</span>
+                  </>
+                )}
+              </button>
+            </div>
             </div>
           </motion.div>
         </>
