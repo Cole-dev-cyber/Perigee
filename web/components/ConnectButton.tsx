@@ -26,7 +26,11 @@ const ArrowDownIcon = () => (
 
 export function ConnectButton() {
   const { address, openModal, disconnect } = useWalletStore(
-    (s) => ({ address: s.address, openModal: s.openModal, disconnect: s.disconnect }),
+    (s) => ({
+      address: s.address,
+      openModal: s.openModal,
+      disconnect: s.disconnect,
+    }),
     shallow,
   );
   const isConnected = !!address;
@@ -62,9 +66,11 @@ export function ConnectButton() {
   if (isConnected && address) {
     return (
       <div className="relative" ref={dropdownRef}>
-        <button
+        <Button
           onClick={() => setDropdownOpen(!dropdownOpen)}
-          className="flex items-center gap-3 px-6 py-3 rounded-s-2xl bg-[#0F1621] border border-[#1e293b] hover:border-[#33C5E0]/50 transition-all group pointer-events-auto"
+          variant="outline"
+          size="sm"
+          className="group"
         >
           <div className="w-2 h-2 rounded-full bg-[#33C5E0] shadow-[0_0_8px_#33C5E0]" />
           <span className="text-[#33C5E0] font-medium tracking-wide">
@@ -77,24 +83,35 @@ export function ConnectButton() {
           >
             <ArrowDownIcon />
           </div>
-        </button>
+        </Button>
 
         <AnimatePresence>
           {dropdownOpen && (
             <motion.div
-              initial={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 10 }}
-              animate={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 1, y: 0 }}
-              exit={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 10 }}
+              initial={
+                shouldReduceMotion
+                  ? { opacity: 1, y: 0 }
+                  : { opacity: 0, y: 10 }
+              }
+              animate={
+                shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 1, y: 0 }
+              }
+              exit={
+                shouldReduceMotion
+                  ? { opacity: 1, y: 0 }
+                  : { opacity: 0, y: 10 }
+              }
               transition={{ duration: shouldReduceMotion ? 0 : 0.15 }}
               className="absolute top-full right-0 mt-2 w-full min-w-[180px] bg-[#0F1621] border border-[#1e293b] rounded-xl shadow-xl overflow-hidden z-50"
             >
-              <button
+              <Button
                 onClick={handleDisconnect}
-                className="flex items-center gap-3 w-full px-4 py-3 text-red-400 hover:bg-white/5 transition-colors text-sm font-medium"
+                variant="ghost"
+                className="w-full justify-start"
               >
-                <LogOut className="w-4 h-4" />
+                <LogOut className="w-4 h-4 mr-2" />
                 Disconnect
-              </button>
+              </Button>
             </motion.div>
           )}
         </AnimatePresence>
@@ -102,18 +119,14 @@ export function ConnectButton() {
     );
   }
 
+  import { Button } from "./ui/Button";
+
+  // ... (rest of the file)
+
   return (
-    <motion.button
-      whileHover={shouldReduceMotion ? undefined : { scale: 1.02 }}
-      whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}
-      onClick={openModal}
-      className="flex items-center gap-4"
-    >
-      <div className="flex items-center gap-4 px-8 py-3 rounded-s-2xl bg-[#0F1621] border border-[#1e293b] hover:border-[#33C5E0]/50 transition-all text-[#33C5E0] font-medium tracking-wide shadow-lg shadow-black/20">
-        <span>Connect Wallet</span>
-        <ArrowDownIcon />
-      </div>
-      <div className="w-1.5 h-8 bg-[#161E22] flex items-center justify-center transition-colors" />
-    </motion.button>
+    <Button onClick={openModal} size="lg">
+      <span>Connect Wallet</span>
+      <ArrowDownIcon />
+    </Button>
   );
 }

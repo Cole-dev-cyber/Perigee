@@ -20,7 +20,9 @@ export default function ManagerOnboarding() {
   const [kycRef, setKycRef] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [managerRecord, setManagerRecord] = useState<Awaited<ReturnType<typeof managerService.register>> | null>(null);
+  const [managerRecord, setManagerRecord] = useState<Awaited<
+    ReturnType<typeof managerService.register>
+  > | null>(null);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -43,7 +45,7 @@ export default function ManagerOnboarding() {
       try {
         sessionStorage.setItem(
           "onboarding_draft",
-          JSON.stringify({ name, email, kycRef })
+          JSON.stringify({ name, email, kycRef }),
         );
       } catch {
         // ignore storage errors
@@ -61,7 +63,17 @@ export default function ManagerOnboarding() {
     try {
       const status = await managerService.checkStatus(addr);
       if (status.status === "approved") {
-        setManagerRecord({ id: status.id, stellar_address: addr, name: "", email: "", status: status.status, kyc_document_ref: "", notes: "", created_at: "", updated_at: "" });
+        setManagerRecord({
+          id: status.id,
+          stellar_address: addr,
+          name: "",
+          email: "",
+          status: status.status,
+          kyc_document_ref: "",
+          notes: "",
+          created_at: "",
+          updated_at: "",
+        });
         setStep("status");
       } else if (status.status === "pending") {
         setStep("submitted");
@@ -144,7 +156,9 @@ export default function ManagerOnboarding() {
             {step === "register" && (
               <form onSubmit={handleRegister} className="space-y-5">
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-300">Stellar Address</label>
+                  <label className="mb-1 block text-sm font-medium text-slate-300">
+                    Stellar Address
+                  </label>
                   <input
                     value={address || ""}
                     disabled
@@ -152,7 +166,9 @@ export default function ManagerOnboarding() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-300">Full Name *</label>
+                  <label className="mb-1 block text-sm font-medium text-slate-300">
+                    Full Name *
+                  </label>
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -162,7 +178,9 @@ export default function ManagerOnboarding() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-300">Email</label>
+                  <label className="mb-1 block text-sm font-medium text-slate-300">
+                    Email
+                  </label>
                   <input
                     type="email"
                     value={email}
@@ -172,7 +190,9 @@ export default function ManagerOnboarding() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-300">KYC Document Reference</label>
+                  <label className="mb-1 block text-sm font-medium text-slate-300">
+                    KYC Document Reference
+                  </label>
                   <input
                     value={kycRef}
                     onChange={(e) => setKycRef(e.target.value)}
@@ -180,20 +200,16 @@ export default function ManagerOnboarding() {
                     className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500"
                   />
                 </div>
-
                 {error && (
                   <div className="rounded-lg border border-red-800 bg-red-950/50 px-4 py-3 text-sm text-red-400">
                     {error}
                   </div>
                 )}
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="rounded-lg bg-cyan-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-cyan-500 disabled:opacity-50 transition-colors"
-                >
+                import {Button} from "../../components/ui/Button"; // ... (rest
+                of the file)
+                <Button type="submit" disabled={loading}>
                   {loading ? "Submitting..." : "Submit Registration"}
-                </button>
+                </Button>
               </form>
             )}
 
@@ -201,12 +217,19 @@ export default function ManagerOnboarding() {
               <div className="space-y-4">
                 <div className="rounded-lg border border-yellow-800 bg-yellow-950/50 px-4 py-3 text-sm text-yellow-400">
                   Your registration has been submitted and is pending approval.
-                  You will be able to create vaults once an operator approves your account.
+                  You will be able to create vaults once an operator approves
+                  your account.
                 </div>
                 {managerRecord && (
                   <div className="space-y-2 text-sm text-slate-400">
-                    <p><span className="text-slate-300">ID:</span> {managerRecord.id}</p>
-                    <p><span className="text-slate-300">Status:</span> {managerRecord.status}</p>
+                    <p>
+                      <span className="text-slate-300">ID:</span>{" "}
+                      {managerRecord.id}
+                    </p>
+                    <p>
+                      <span className="text-slate-300">Status:</span>{" "}
+                      {managerRecord.status}
+                    </p>
                   </div>
                 )}
               </div>
@@ -220,19 +243,17 @@ export default function ManagerOnboarding() {
                   </div>
                 ) : (
                   <div className="rounded-lg border border-green-800 bg-green-950/50 px-4 py-3 text-sm text-green-400">
-                    Your manager account is approved and active. You can now create vaults.
+                    Your manager account is approved and active. You can now
+                    create vaults.
                   </div>
                 )}
               </div>
             )}
 
             <div className="mt-8 border-t border-slate-800 pt-4">
-              <button
-                onClick={() => router.push("/")}
-                className="text-sm text-cyan-400 hover:text-cyan-300 transition-colors"
-              >
+              <Button variant="link" onClick={() => router.push("/")}>
                 &larr; Back to Analyzer
-              </button>
+              </Button>
             </div>
           </div>
         </section>
