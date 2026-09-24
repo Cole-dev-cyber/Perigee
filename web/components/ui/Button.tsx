@@ -1,110 +1,57 @@
-import React from "react";
-import { clsx } from "clsx";
-import { twMerge } from "tailwind-merge";
+import * as React from "react";
+import { Slot } from "@radix-ui/react-slot";
+import { cva, type VariantProps } from "class-variance-authority";
 
-// ---------------------------------------------------------------------------
-// Shared utility — mirrors shadcn/ui convention (WEB-27, #113)
-// ---------------------------------------------------------------------------
-function cn(...inputs: Parameters<typeof clsx>) {
-  return twMerge(clsx(inputs));
+import { cn } from "../../lib/utils";
+
+const buttonVariants = cva(
+  "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+  {
+    variants: {
+      variant: {
+        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        destructive:
+          "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+        outline:
+          "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
+        secondary:
+          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        ghost: "hover:bg-accent hover:text-accent-foreground",
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-10 px-4 py-2",
+        sm: "h-9 rounded-md px-3",
+        lg: "h-11 rounded-md px-8",
+        icon: "h-10 w-10",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  },
+);
+
+export interface ButtonProps
+  extends
+    React.ButtonHTMLAttributes<HTMLButtonElement>,
+    VariantProps<typeof buttonVariants> {
+  asChild?: boolean;
 }
 
-type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
-type ButtonSize = "sm" | "md" | "lg";
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant, size, asChild = false, ...props }, ref) => {
+    const Comp = asChild ? Slot : "button";
+    return (
+      <Comp
+        className={cn(buttonVariants({ variant, size, className }))}
+        ref={ref}
+        {...props}
+      />
+    );
+  },
+);
+Button.displayName = "Button";
 
-interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: ButtonVariant;
-  size?: ButtonSize;
-  isLoading?: boolean;
-  leftIcon?: React.ReactNode;
-  rightIcon?: React.ReactNode;
-}
-
-const variantClasses: Record<ButtonVariant, string> = {
-  primary:
-    "bg-sky-700 text-white hover:bg-sky-600 focus-visible:ring-sky-500 disabled:bg-sky-900 disabled:text-sky-300",
-  secondary:
-    "bg-slate-700 text-slate-100 hover:bg-slate-600 focus-visible:ring-slate-500 disabled:bg-slate-800 disabled:text-slate-500",
-  ghost:
-    "bg-transparent text-slate-300 hover:bg-slate-800 hover:text-slate-100 focus-visible:ring-slate-500 disabled:text-slate-400",
-  danger:
-    "bg-rose-700 text-white hover:bg-rose-600 focus-visible:ring-rose-500 disabled:bg-rose-900 disabled:text-rose-400",
-};
-
-const sizeClasses: Record<ButtonSize, string> = {
-  sm: "h-7 px-2.5 text-xs gap-1.5",
-  md: "h-9 px-4 text-sm gap-2",
-  lg: "h-11 px-6 text-base gap-2.5",
-};
-
-/**
- * Standardized Button component for the Perigee component library.
- *
- * Resolves WEB-27 (#113): component library not standardized.
- * All interactive buttons in the app should use this component
- * instead of ad-hoc <button> elements to ensure consistent styling,
- * focus management, and loading/disabled states.
- *
- * @example
- * <Button variant="primary" onClick={handleClick}>Connect Wallet</Button>
- * <Button variant="secondary" size="sm" isLoading>Analyzing...</Button>
- */
-export function Button({
-  variant = "primary",
-  size = "md",
-  isLoading = false,
-  leftIcon,
-  rightIcon,
-  children,
-  className,
-  disabled,
-  ...rest
-}: ButtonProps) {
-  const isDisabled = disabled || isLoading;
-
-  return (
-    <button
-      {...rest}
-      disabled={isDisabled}
-      aria-busy={isLoading}
-      className={cn(
-        // Base
-        "inline-flex items-center justify-center font-medium rounded-md transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950",
-        "disabled:pointer-events-none disabled:cursor-not-allowed",
-        // Variant & size
-        variantClasses[variant],
-        sizeClasses[size],
-        className,
-      )}
-    >
-      {isLoading ? (
-        <svg
-          className="animate-spin h-4 w-4 shrink-0"
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <circle
-            className="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-          />
-          <path
-            className="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-          />
-        </svg>
-      ) : (
-        leftIcon && <span className="shrink-0">{leftIcon}</span>
-      )}
-      <span>{children}</span>
-      {!isLoading && rightIcon && <span className="shrink-0">{rightIcon}</span>}
-    </button>
-  );
-}
+export { Button, buttonVariants };

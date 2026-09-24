@@ -1175,10 +1175,13 @@ impl SimulationEngine {
             advertise: None,
         };
         let registry = ProviderRegistry::new(vec![provider]);
-        let svc = Arc::new(StellarService::new(
-            Arc::clone(&registry),
-            StellarServiceConfig::default(),
-        ));
+        let svc = Arc::new(
+            StellarService::new(
+                Arc::clone(&registry),
+                StellarServiceConfig::default(),
+            )
+            .unwrap_or_else(|e| panic!("Failed to build Stellar HTTP client: {e}")),
+        );
         Self {
             rpc_url,
             stellar_service: svc,
@@ -1197,10 +1200,13 @@ impl SimulationEngine {
 
     /// Create an engine backed by a `ProviderRegistry` using the provided mode.
     pub fn with_registry_and_mode(registry: Arc<ProviderRegistry>, mode: SimulationMode) -> Self {
-        let svc = Arc::new(StellarService::new(
-            Arc::clone(&registry),
-            StellarServiceConfig::default(),
-        ));
+        let svc = Arc::new(
+            StellarService::new(
+                Arc::clone(&registry),
+                StellarServiceConfig::default(),
+            )
+            .unwrap_or_else(|e| panic!("Failed to build Stellar HTTP client: {e}")),
+        );
         Self {
             rpc_url: String::new(),
             stellar_service: svc,
@@ -1217,10 +1223,13 @@ impl SimulationEngine {
         registry: Arc<ProviderRegistry>,
         cache: Arc<crate::cache::ContractCache>,
     ) -> Self {
-        let svc = Arc::new(StellarService::new(
-            Arc::clone(&registry),
-            StellarServiceConfig::default(),
-        ));
+        let svc = Arc::new(
+            StellarService::new(
+                Arc::clone(&registry),
+                StellarServiceConfig::default(),
+            )
+            .unwrap_or_else(|e| panic!("Failed to build Stellar HTTP client: {e}")),
+        );
         Self {
             rpc_url: String::new(),
             stellar_service: svc,
@@ -1247,7 +1256,10 @@ impl SimulationEngine {
         mode: SimulationMode,
     ) -> Self {
         let config = StellarServiceConfig::default().with_timeout(timeout);
-        let svc = Arc::new(StellarService::new(Arc::clone(&registry), config));
+        let svc = Arc::new(
+            StellarService::new(Arc::clone(&registry), config)
+                .unwrap_or_else(|e| panic!("Failed to build Stellar HTTP client: {e}")),
+        );
         Self {
             rpc_url: String::new(),
             stellar_service: svc,

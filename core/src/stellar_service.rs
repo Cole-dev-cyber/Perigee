@@ -116,6 +116,13 @@ pub enum StellarServiceError {
         url: String,
         last_error: String,
     },
+
+    /// Failed to build the underlying `reqwest::Client`.
+    #[error("Failed to build HTTP client: {source}")]
+    ClientBuild {
+        #[source]
+        source: reqwest::Error,
+    },
 }
 
 impl StellarServiceError {
@@ -204,7 +211,16 @@ impl StellarService {
     ///
     /// One `StellarService` should be created per process — its internal
     /// `reqwest::Client` maintains the shared connection pool.
-    pub fn new(registry: Arc<ProviderRegistry>, config: StellarServiceConfig) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StellarServiceError::ClientBuild`] if the underlying
+    /// `reqwest::Client` cannot be constructed (e.g. bad TLS configuration).
+    /// In practice this should not happen with the default settings used here.
+    pub fn new(
+        registry: Arc<ProviderRegistry>,
+        config: StellarServiceConfig,
+    ) -> Result<Self, StellarServiceError> {
         let client = Client::builder()
             // Keep up to 20 idle connections per host ready for reuse.
             .pool_max_idle_per_host(20)
@@ -212,13 +228,13 @@ impl StellarService {
             .tcp_keepalive(Duration::from_secs(60))
             // No global timeout here — we apply per-call timeouts in call_rpc.
             .build()
-            .expect("reqwest::Client builder should not fail with these settings");
+            .map_err(|source| StellarServiceError::ClientBuild { source })?;
 
-        Self(Arc::new(Inner {
+        Ok(Self(Arc::new(Inner {
             client,
             registry,
             config,
-        }))
+        })))
     }
 
     /// Verify that `provider` is connected to the expected Stellar network.
