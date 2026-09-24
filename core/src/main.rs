@@ -1,4 +1,7 @@
 #![allow(dead_code)]
+// Prevent regressions: production code must not use .unwrap() or .expect().
+#![warn(clippy::unwrap_used, clippy::expect_used)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod audit_log;
 mod auth;
@@ -2244,10 +2247,13 @@ async fn main() {
     // ── Process-wide Stellar RPC service ────────────────────────────────
     // One shared reqwest::Client (connection pool) and one retry policy for
     // the entire process.  Every subsystem receives an Arc clone of this.
-    let stellar_service = Arc::new(StellarService::new(
-        Arc::clone(&registry),
-        StellarServiceConfig::default().with_timeout(simulation_timeout),
-    ));
+    let stellar_service = Arc::new(
+        StellarService::new(
+            Arc::clone(&registry),
+            StellarServiceConfig::default().with_timeout(simulation_timeout),
+        )
+        .unwrap_or_else(|e| panic!("Failed to build Stellar HTTP client: {e}")),
+    );
 
     for provider in &startup_providers {
         if let Err(error) = stellar_service
@@ -2386,11 +2392,14 @@ async fn main() {
             request_timeout: std::time::Duration::from_secs(10),
         };
 
-        let collector = Arc::new(FeeCollector::new(
-            Arc::clone(&registry),
-            Arc::clone(&fee_store),
-            collector_config,
-        ));
+        let collector = Arc::new(
+            FeeCollector::new(
+                Arc::clone(&registry),
+                Arc::clone(&fee_store),
+                collector_config,
+            )
+            .unwrap_or_else(|e| panic!("Failed to build fee collector HTTP client: {e}")),
+        );
 
         tokio::spawn(async move {
             collector.run_collection_loop().await;

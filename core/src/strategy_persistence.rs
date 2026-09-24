@@ -63,11 +63,15 @@ impl StrategyStateManager {
             })
     }
 
-    pub fn persist_to_bytes(&self) -> Vec<u8> {
-        let state = self.serialized_state()
-            .expect("serialization of StrategyState map should not fail");
+    /// Serialize the current strategy state to bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if serialization fails (e.g. a field value
+    /// contains data that `serde_json` cannot represent).
+    pub fn persist_to_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
+        let state = self.serialized_state()?;
         serde_json::to_vec(&state)
-            .expect("serialization of StrategyState map should not fail")
     }
 
     pub fn restore_from_bytes(data: &[u8]) -> Result<Self, String> {
@@ -85,7 +89,9 @@ impl StrategyStateManager {
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)?;
 
-        let data = self.persist_to_bytes();
+        let data = self.persist_to_bytes().map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData, e)
+        })?;
         let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
         temporary.write_all(&data)?;
         temporary.as_file().sync_all()?;

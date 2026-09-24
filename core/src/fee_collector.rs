@@ -60,24 +60,28 @@ pub struct FeeCollector {
 
 impl FeeCollector {
     /// Create a new fee collector
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StellarServiceError`] if the internal HTTP client cannot be built.
     pub fn new(
         registry: Arc<ProviderRegistry>,
         store: Arc<FeeStore>,
         config: FeeCollectorConfig,
-    ) -> Self {
+    ) -> Result<Self, StellarServiceError> {
         let svc_config = StellarServiceConfig::default()
             .with_timeout(config.request_timeout)
             // Fee collection is a background probe — one retry is enough.
             .with_max_attempts(2);
-        let stellar_service = Arc::new(StellarService::new(Arc::clone(&registry), svc_config));
-        Self {
+        let stellar_service = Arc::new(StellarService::new(Arc::clone(&registry), svc_config)?);
+        Ok(Self {
             registry,
             store,
             stellar_service,
             config,
             last_collected_sequence: std::sync::atomic::AtomicU64::new(0),
             collecting: Arc::new(AtomicBool::new(false)),
-        }
+        })
     }
 
     /// Run the background collection loop
