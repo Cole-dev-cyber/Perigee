@@ -11,3 +11,7 @@ test_snapshots/
 .DS_Store
 .env
 .env.local
+
+# Coverage reports (scripts/coverage.sh)
+coverage-report/
+lcov.info
