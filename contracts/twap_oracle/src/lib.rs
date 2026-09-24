@@ -13,6 +13,7 @@ pub enum Error {
     NotInitialized = 2,
     InvalidPrice = 3,
     InsufficientTimeElapsed = 4,
+    StalePrice = 5,
 }
 
 /// Storage keys used by the TWAP oracle contract.
@@ -22,6 +23,7 @@ pub enum DataKey {
     TokenA,
     TokenB,
     MinUpdateIntervalSeconds,
+    MaxPriceAgeSeconds,
     /// Single instance key holding the whole TWAP accumulator state.
     ///
     /// Replaces the four separate `CumulativePrice` / `TotalTime` /
@@ -84,6 +86,8 @@ impl TwapOracle {
         e.storage().instance().set(&DataKey::TokenA, &token_a);
         e.storage().instance().set(&DataKey::TokenB, &token_b);
         e.storage().instance().set(&DataKey::MinUpdateIntervalSeconds, &min_update_interval_seconds);
+        // Staleness checks are disabled by default (0 = unlimited age).
+        e.storage().instance().set(&DataKey::MaxPriceAgeSeconds, &0u64);
         // One write for the whole accumulator state.
         e.storage().instance().set(&DataKey::State, &TwapStorage::default());
         Ok(())
@@ -155,6 +159,43 @@ impl TwapOracle {
         }
     }
 
+    /// Sets the maximum allowed age (in seconds) of the last price update before
+    /// the feed is considered stale. A value of 0 disables the staleness check.
+    ///
+    /// # Returns
+    /// - `Err(Error::NotInitialized)` if not initialized.
+    pub fn set_max_price_age(e: Env, max_age_seconds: u64) -> Result<(), Error> {
+        if !e.storage().instance().has(&DataKey::TokenA) {
+            return Err(Error::NotInitialized);
+        }
+        e.storage().instance().set(&DataKey::MaxPriceAgeSeconds, &max_age_seconds);
+        Ok(())
+    }
+
+    /// Returns the configured maximum price age in seconds (0 = disabled).
+    pub fn get_max_price_age(e: Env) -> u64 {
+        e.storage().instance().get(&DataKey::MaxPriceAgeSeconds).unwrap_or(0)
+    }
+
+    /// Returns `true` when the last recorded price is older than the configured
+    /// maximum age, or when no price has been recorded yet, so consumers never
+    /// trust an empty feed.
+    ///
+    /// Returns `false` when staleness checks are disabled (`max_age_seconds == 0`).
+    pub fn is_price_stale(e: Env) -> bool {
+        let max_age: u64 = e.storage().instance().get(&DataKey::MaxPriceAgeSeconds).unwrap_or(0);
+        if max_age == 0 {
+            return false;
+        }
+        let last_update: u64 = e.storage().instance().get(&DataKey::LastUpdateTimestamp).unwrap_or(0);
+        if last_update == 0 {
+            // No price update has ever been recorded.
+            return true;
+        }
+        let elapsed = e.ledger().timestamp().saturating_sub(last_update);
+        elapsed > max_age
+    }
+
     /// Returns the token pair addresses.
     pub fn get_tokens(e: Env) -> (Address, Address) {
         let token_a: Address = e.storage().instance().get(&DataKey::TokenA).unwrap();
@@ -185,7 +226,14 @@ impl TwapOracle {
 #[contractimpl]
 impl PriceOracle for TwapOracle {
     /// Returns the latest TWAP price.
+    ///
+    /// Returns `0` when the feed is stale so downstream aggregators (which
+    /// treat `0` as "no reliable quote") reject it instead of consuming an
+    /// out-of-date value. The `i128` ABI is preserved.
     fn latest_price(e: Env) -> i128 {
+        if Self::is_price_stale(e.clone()) {
+            return 0;
+        }
         Self::get_twap(e)
     }
 }
