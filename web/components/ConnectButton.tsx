@@ -2,9 +2,10 @@
 
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { LogOut, Loader2 } from "lucide-react";
+import { LogOut } from "lucide-react";
 import { useWalletStore } from "../context/WalletContext";
 import { shallow } from "../lib/createStore";
+import { Spinner } from "./ui/Spinner";
 
 const ArrowDownIcon = () => (
   <svg
@@ -121,13 +122,8 @@ export function ConnectButton() {
       <div className="flex items-center gap-4 px-8 py-3 rounded-s-2xl bg-[#0F1621] border border-[#1e293b] hover:border-[#33C5E0]/50 transition-all text-[#33C5E0] font-medium tracking-wide shadow-lg shadow-black/20">
         {isConnecting ? (
           <>
-            {/* Animated spinner replaces the arrow icon while connecting */}
-            <Loader2
-              className={`w-5 h-5 text-[#33C5E0] ${
-                shouldReduceMotion ? "" : "animate-spin"
-              }`}
-              aria-hidden="true"
-            />
+            {/* Shared Spinner component — size/color consistent with ui/Spinner */}
+            <Spinner size="sm" color="primary" aria-hidden />
             <span>Connecting…</span>
           </>
         ) : (
