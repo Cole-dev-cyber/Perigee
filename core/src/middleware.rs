@@ -25,6 +25,7 @@
 //! ```
 
 use std::{
+    collections::HashMap,
     future::Future,
     pin::Pin,
     sync::Arc,
@@ -35,11 +36,12 @@ use std::{
 use axum::{
     body::Body,
     extract::Request,
-    http::{HeaderName, HeaderValue},
+    http::{header, HeaderName, HeaderValue, Method},
     middleware::Next,
     response::Response,
 };
 use tower::{Layer, Service};
+use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 use tracing::info;
 use uuid::Uuid;
 
@@ -268,6 +270,315 @@ pub async fn method_not_allowed_middleware(request: Request, next: Next) -> Resp
     response
 }
 
+// ── Request body size limits (CORE-20) ──────────────────────────────────────
+
+/// Enforced size limit when nothing is configured.
+const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
+
+/// Per-route maximum POST/PUT request body size (CORE-20).
+///
+/// Configured from the environment:
+/// - `PERIGEE_MAX_BODY_BYTES`           — global default (1 MiB).
+/// - `PERIGEE_MAX_BODY_BYTES_PER_ROUTE` — comma-separated `route=bytes` pairs,
+///   e.g. `/analyze=4194304,/vaults=1048576`.
+///
+/// Requests whose `Content-Length` exceeds the matched route's limit are
+/// rejected with `413 Payload Too Large` before reaching the handler, closing
+/// the oversized-body denial-of-service vector without per-route code changes.
+#[derive(Debug, Clone)]
+pub struct BodySizePolicy {
+    default_max: usize,
+    per_route: HashMap<String, usize>,
+}
+
+impl BodySizePolicy {
+    /// Create a policy with a global default and no per-route overrides.
+    pub fn new(default_max: usize) -> Self {
+        Self {
+            default_max,
+            per_route: HashMap::new(),
+        }
+    }
+
+    /// Build the policy from `PERIGEE_MAX_BODY_BYTES` and
+    /// `PERIGEE_MAX_BODY_BYTES_PER_ROUTE` (falling back to sane defaults).
+    pub fn from_env() -> Self {
+        let default_max = std::env::var("PERIGEE_MAX_BODY_BYTES")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(DEFAULT_MAX_BODY_BYTES);
+
+        let mut policy = Self::new(default_max);
+        if let Ok(overrides) = std::env::var("PERIGEE_MAX_BODY_BYTES_PER_ROUTE") {
+            for pair in overrides.split(',') {
+                if let Some((route, size)) = parse_size_pair(pair) {
+                    policy.per_route.insert(route, size);
+                }
+            }
+        }
+        policy
+    }
+
+    /// The global default body-size limit, in bytes.
+    pub fn default_max(&self) -> usize {
+        self.default_max
+    }
+
+    /// The byte limit that applies to `route` (per-route override, if any).
+    pub fn limit_for(&self, route: &str) -> usize {
+        self.per_route
+            .get(route)
+            .copied()
+            .unwrap_or(self.default_max)
+    }
+}
+
+/// Parse a single `route=bytes` override; malformed pairs are skipped.
+fn parse_size_pair(pair: &str) -> Option<(String, usize)> {
+    let (route, size) = pair.split_once('=')?;
+    let size = size.trim().parse::<usize>().ok()?;
+    if size == 0 {
+        return None;
+    }
+    Some((route.trim().to_string(), size))
+}
+
+/// Tower [`Layer`] enforcing [`BodySizePolicy`] per matched route.
+#[derive(Clone)]
+pub struct BodySizeLimitLayer {
+    policy: Arc<BodySizePolicy>,
+}
+
+impl BodySizeLimitLayer {
+    pub fn new(policy: Arc<BodySizePolicy>) -> Self {
+        Self { policy }
+    }
+}
+
+impl<S> Layer<S> for BodySizeLimitLayer {
+    type Service = BodySizeLimitMiddleware<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        BodySizeLimitMiddleware {
+            inner,
+            policy: Arc::clone(&self.policy),
+        }
+    }
+}
+
+/// Tower [`Service`] that short-circuits oversized POST/PUT bodies with `413`.
+#[derive(Clone)]
+pub struct BodySizeLimitMiddleware<S> {
+    inner: S,
+    policy: Arc<BodySizePolicy>,
+}
+
+impl<S> Service<Request<Body>> for BodySizeLimitMiddleware<S>
+where
+    S: Service<Request<Body>, Response = Response> + Send + Clone + 'static,
+    S::Future: Send + 'static,
+    S::Error: std::fmt::Display,
+{
+    type Response = Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Request<Body>) -> Self::Future {
+        // Only POST/PUT endpoints carry the request bodies CORE-20 polices.
+        if matches!(req.method().as_str(), "POST" | "PUT") {
+            let route = matched_route(&req);
+            let limit = self.policy.limit_for(&route);
+
+            if let Some(len) = content_length(&req) {
+                if len > limit {
+                    let response = payload_too_large(limit);
+                    return Box::pin(async move { Ok(response) });
+                }
+            }
+        }
+
+        let mut inner = self.inner.clone();
+        Box::pin(async move { inner.call(req).await })
+    }
+}
+
+/// The matched-route pattern (`/analyze/:id`) or the raw path when unmatched.
+fn matched_route(req: &Request<Body>) -> String {
+    req.extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(|mp| mp.as_str().to_string())
+        .unwrap_or_else(|| req.uri().path().to_string())
+}
+
+/// The declared `Content-Length`, when the request carries one.
+fn content_length(req: &Request<Body>) -> Option<usize> {
+    req.headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<usize>().ok())
+}
+
+/// Standard `413 Payload Too Large` JSON envelope, mirroring the repository's
+/// `{ "error", "message" }` error shape.
+fn payload_too_large(limit: usize) -> Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use axum::Json;
+
+    let body = Json(serde_json::json!({
+        "error": "PAYLOAD_TOO_LARGE",
+        "message": format!(
+            "Request body exceeds the {limit} byte limit for this route"
+        ),
+        "limit": limit,
+    }));
+    (StatusCode::PAYLOAD_TOO_LARGE, body).into_response()
+}
+
+// ── CORS configuration module (CORE-21) ─────────────────────────────────────
+
+/// Per-origin CORS allowlist with per-route overrides (CORE-21).
+///
+/// Configured from the environment:
+/// - `CORS_ALLOWED_ORIGINS`   — comma-separated exact origins, e.g.
+///   `https://app.example.com,http://localhost:5173`.
+/// - `CORS_ALLOWED_METHODS`   — comma-separated methods
+///   (default `GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS`).
+/// - `CORS_PER_ROUTE_ORIGINS` — comma-separated `route=origins` pairs where the
+///   origins value is a pipe-separated sub-list, e.g.
+///   `/analyze=https://a.example.com|https://b.example.com`.
+/// - `CORS_ALLOW_CREDENTIALS` — `true`/`1` enables credential-bearing requests.
+///
+/// Unlike the repository's single global [`CorsLayer`], this module supports
+/// distinct per-route policies, so public endpoints can stay permissive while
+/// sensitive routes allow only their own frontend.
+#[derive(Debug, Clone)]
+pub struct CorsConfig {
+    pub allowed_origins: Vec<String>,
+    pub allowed_methods: Vec<Method>,
+    pub allow_credentials: bool,
+    pub per_route_origins: HashMap<String, Vec<String>>,
+}
+
+impl CorsConfig {
+    /// Create a config from an explicit allowlist.
+    pub fn new(allowed_origins: Vec<String>, allow_credentials: bool) -> Self {
+        Self {
+            allowed_origins,
+            allowed_methods: vec![
+                Method::GET,
+                Method::HEAD,
+                Method::POST,
+                Method::PUT,
+                Method::PATCH,
+                Method::DELETE,
+                Method::OPTIONS,
+            ],
+            allow_credentials,
+            per_route_origins: HashMap::new(),
+        }
+    }
+
+    /// Build the config from the `CORS_*` environment variables.
+    pub fn from_env() -> Self {
+        let allowed_origins = split_csv(&std::env::var("CORS_ALLOWED_ORIGINS").unwrap_or_default());
+
+        let allowed_methods: Vec<Method> = {
+            let raw = std::env::var("CORS_ALLOWED_METHODS").unwrap_or_default();
+            let parsed = split_csv(&raw)
+                .into_iter()
+                .filter_map(|m| Method::from_bytes(m.as_bytes()).ok())
+                .collect::<Vec<_>>();
+            if parsed.is_empty() {
+                Self::new(Vec::new(), false).allowed_methods
+            } else {
+                parsed
+            }
+        };
+
+        let allow_credentials = matches!(
+            std::env::var("CORS_ALLOW_CREDENTIALS")
+                .unwrap_or_default()
+                .trim()
+                .to_lowercase()
+                .as_str(),
+            "true" | "1"
+        );
+
+        let mut per_route_origins = HashMap::new();
+        if let Ok(pairs) = std::env::var("CORS_PER_ROUTE_ORIGINS") {
+            for pair in pairs.split(',') {
+                if let Some((route, origins)) = pair.split_once('=') {
+                    let list = split_csv(&origins.replace('|', ","));
+                    if !list.is_empty() {
+                        per_route_origins.insert(route.trim().to_string(), list);
+                    }
+                }
+            }
+        }
+
+        Self {
+            allowed_origins,
+            allowed_methods,
+            allow_credentials,
+            per_route_origins,
+        }
+    }
+
+    /// The origin allowlist that applies to `route`.
+    pub fn origins_for(&self, route: &str) -> &[String] {
+        self.per_route_origins
+            .get(route)
+            .map(|v| v.as_slice())
+            .unwrap_or_else(|| self.allowed_origins.as_slice())
+    }
+
+    /// Whether exact `origin` is allowed for `route`.
+    pub fn allows_origin(&self, origin: &str, route: &str) -> bool {
+        self.origins_for(route).iter().any(|o| o == origin)
+    }
+
+    /// Build a [`CorsLayer`] for `route`, honouring any per-route allowlist.
+    pub fn to_cors_layer(&self, route: &str) -> CorsLayer {
+        let origin_values: Vec<HeaderValue> = self
+            .origins_for(route)
+            .iter()
+            .filter_map(|o| HeaderValue::from_str(o).ok())
+            .collect();
+
+        let layer = if origin_values.is_empty() {
+            CorsLayer::new().allow_origin(AllowOrigin::any())
+        } else {
+            CorsLayer::new().allow_origin(AllowOrigin::list(origin_values))
+        };
+
+        layer
+            .allow_methods(AllowMethods::list(self.allowed_methods.clone()))
+            .allow_headers(AllowHeaders::list(vec![
+                header::CONTENT_TYPE,
+                header::AUTHORIZATION,
+                header::HeaderName::from_static("x-request-id"),
+                header::HeaderName::from_static("x-correlation-id"),
+            ]))
+            .allow_credentials(self.allow_credentials)
+    }
+}
+
+/// Split a comma-separated value into trimmed, non-empty items.
+fn split_csv(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 // ── API Versioning Middleware ──────────────────────────────────────────────────
 
 pub const DEFAULT_API_VERSION: &str = "v1";
@@ -457,5 +768,76 @@ mod version_middleware_tests {
             res.headers().get("x-api-version").unwrap().to_str().unwrap(),
             "v1"
         );
+    }
+}
+
+#[cfg(test)]
+mod body_size_and_cors_tests {
+    use super::*;
+
+    #[test]
+    fn size_pairs_parse_and_skip_malformed() {
+        assert_eq!(
+            parse_size_pair("/analyze=4194304"),
+            Some(("/analyze".to_string(), 4_194_304))
+        );
+        assert_eq!(parse_size_pair("=/0"), None);
+        assert_eq!(parse_size_pair("nonsense"), None);
+    }
+
+    #[test]
+    fn body_size_policy_defaults_and_overrides() {
+        let mut policy = BodySizePolicy::new(1_048_576);
+        policy.per_route.insert("/vaults".to_string(), 512);
+
+        assert_eq!(policy.default_max(), 1_048_576);
+        assert_eq!(policy.limit_for("/analyze"), 1_048_576);
+        assert_eq!(policy.limit_for("/vaults"), 512);
+    }
+
+    #[test]
+    fn content_length_is_read_from_headers() {
+        let req = Request::builder()
+            .uri("/analyze")
+            .header(header::CONTENT_LENGTH, "12345")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(content_length(&req), Some(12_345));
+
+        let no_len = Request::builder()
+            .uri("/analyze")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(content_length(&no_len), None);
+    }
+
+    #[test]
+    fn payload_too_large_returns_413_envelope() {
+        let res = payload_too_large(8192);
+        assert_eq!(res.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[test]
+    fn cors_allowlist_honours_per_route_overrides() {
+        let mut config = CorsConfig::new(vec!["https://global.example.com".to_string()], false);
+        config.per_route_origins.insert(
+            "/analyze".to_string(),
+            vec!["https://analyze.example.com".to_string()],
+        );
+
+        assert!(config.allows_origin("https://global.example.com", "/other"));
+        assert!(!config.allows_origin("https://global.example.com", "/analyze"));
+        assert!(config.allows_origin("https://analyze.example.com", "/analyze"));
+        assert!(!config.allows_origin("https://evil.example.com", "/analyze"));
+    }
+
+    #[test]
+    fn cors_origins_for_falls_back_to_global_allowlist() {
+        let config = CorsConfig::new(vec!["https://global.example.com".to_string()], false);
+
+        assert_eq!(config.origins_for("/unconfigured")[0], "https://global.example.com");
+        // Empty global allowlist falls back to nothing (layer uses Allow-Any).
+        assert!(CorsConfig::new(vec![], false).origins_for("/anything").is_empty());
     }
 }
