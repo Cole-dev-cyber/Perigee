@@ -59,6 +59,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "Perigee-governance-contract"
+version = "0.1.0"
+dependencies = [
+ "emergency_guard",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "Perigee-guards"
 version = "0.1.0"
 dependencies = [
