@@ -72,6 +72,10 @@ pub enum AppError {
     #[error("Conflict: {0}")]
     Conflict(String),
 
+    /// Forbidden errors (e.g. role or vault-scoped authorization failure).
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+
     /// The vault's policy has expired, so it no longer authorises the
     /// operation (BE-023). 403 rather than 400: the request is well formed
     /// and the caller is authenticated — the authority behind it has lapsed.
@@ -90,6 +94,7 @@ impl AppError {
             | Self::NotFound(msg)
             | Self::BadRequest(msg)
             | Self::Unauthorized(msg)
+            | Self::Forbidden(msg)
             | Self::TooManyRequests(msg)
             | Self::Conflict(msg)
             | Self::PolicyExpired(msg) => msg.as_str(),
@@ -102,6 +107,7 @@ impl AppError {
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::BadRequest(_) => ErrorCode::BadRequest,
             Self::Unauthorized(_) => ErrorCode::Unauthorized,
+            Self::Forbidden(_) => ErrorCode::Forbidden,
             Self::TooManyRequests(_) => ErrorCode::TooManyRequests,
             Self::Conflict(_) => ErrorCode::Conflict,
             Self::PolicyExpired(_) => ErrorCode::PolicyExpired,
@@ -127,6 +133,7 @@ impl AppError {
             // Safe variants — their detail is always client-appropriate.
             Self::NotFound(msg) => format!("Not found: {}", msg),
             Self::BadRequest(msg) => format!("Bad request: {}", msg),
+            Self::Forbidden(msg) => format!("Forbidden: {}", msg),
 
             // Sensitive variants — redact in production.
             Self::Internal(msg) => {

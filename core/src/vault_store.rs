@@ -280,6 +280,16 @@ async fn verify_ownership(
     user: &AuthenticatedUser,
     manager_id: &str,
 ) -> Result<(), AppError> {
+    if user.is_admin() {
+        return Ok(());
+    }
+
+    if (user.role == crate::auth::Role::Operator || user.role == crate::auth::Role::Viewer)
+        && !user.vault_scopes.is_empty()
+    {
+        return Ok(());
+    }
+
     let manager = state
         .manager_store
         .find_by_stellar_address(&user.stellar_address)
@@ -338,7 +348,8 @@ pub struct ListVaultsQuery {
     ),
     responses(
         (status = 200, description = "Paginated list of vaults for the manager", body = PagedResponse<VaultRecord>),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden")
     ),
     security(
         ("bearerAuth" = []),
@@ -351,15 +362,20 @@ pub async fn list_vaults_handler(
     Extension(user): Extension<AuthenticatedUser>,
     Query(query): Query<ListVaultsQuery>,
 ) -> Result<Json<crate::db::models::PagedResponse<VaultRecord>>, AppError> {
+    user.authorize_vault_read("*")?;
     verify_ownership(&state, &user, &query.manager_id).await?;
     let pagination = crate::db::models::PaginationParams {
         page: query.page,
         page_size: query.page_size,
     };
-    let result = state
+    let mut result = state
         .vault_store
         .list_by_manager(&query.manager_id, &pagination)
         .await?;
+    if !user.can_access_all_vaults() {
+        result.data.retain(|v| user.can_access_vault(&v.id));
+        result.total_count = result.data.len() as i64;
+    }
     Ok(Json(result))
 }
 
@@ -370,7 +386,8 @@ pub async fn list_vaults_handler(
     responses(
         (status = 200, description = "Vault created", body = VaultRecord),
         (status = 400, description = "Invalid request"),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden: Insufficient privileges or vault-scoped restriction")
     ),
     security(
         ("bearerAuth" = []),
@@ -383,13 +400,30 @@ pub async fn create_vault_handler(
     Extension(user): Extension<AuthenticatedUser>,
     Json(payload): Json<CreateVaultRequest>,
 ) -> Result<Json<VaultRecord>, AppError> {
+    if !user.can_manage_vaults() {
+        crate::audit_log::log_security_event(
+            crate::audit_log::SecurityEventType::VaultAccessDenied,
+            Some(&user.stellar_address),
+            None,
+            None,
+            Some("Role not authorized to create vaults"),
+        );
+        return Err(AppError::Forbidden(
+            format!("Role '{}' is not authorized to create vaults", user.role)
+        ));
+    }
+    if !user.can_access_all_vaults() {
+        return Err(AppError::Forbidden(
+            "Vault-scoped token is not authorized to create new vaults".into(),
+        ));
+    }
     verify_ownership(&state, &user, &payload.manager_id).await?;
     let approved = state
         .manager_store
         .is_approved(&user.stellar_address)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
-    if !approved {
+    if !approved && !user.is_admin() {
         crate::audit_log::log_security_event(
             crate::audit_log::SecurityEventType::VaultAccessDenied,
             Some(&user.stellar_address),
@@ -417,6 +451,7 @@ pub async fn create_vault_handler(
     responses(
         (status = 200, description = "Vault record", body = VaultRecord),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden: Vault scope not authorized"),
         (status = 404, description = "Vault not found")
     ),
     security(
@@ -430,6 +465,7 @@ pub async fn get_vault_handler(
     Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
 ) -> Result<Json<VaultRecord>, AppError> {
+    user.authorize_vault_read(&id)?;
     let vault = state.vault_store.get(&id).await?;
     verify_ownership(&state, &user, &vault.manager_id).await?;
     Ok(Json(vault))
@@ -443,6 +479,7 @@ pub async fn get_vault_handler(
     responses(
         (status = 200, description = "Vault updated (version bumped)", body = VaultRecord),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden: Insufficient privileges or vault scope not authorized"),
         (status = 404, description = "Vault not found"),
         (status = 409, description = "Optimistic lock conflict — reload and retry")
     ),
@@ -458,6 +495,7 @@ pub async fn update_vault_handler(
     Path(id): Path<String>,
     Json(payload): Json<UpdateVaultRequest>,
 ) -> Result<Json<VaultRecord>, AppError> {
+    user.authorize_vault_write(&id)?;
     let vault = state.vault_store.get(&id).await?;
     verify_ownership(&state, &user, &vault.manager_id).await?;
 
@@ -477,21 +515,21 @@ pub async fn update_vault_handler(
 
 /// Gate a handler on admin privileges.
 ///
-/// There is no admin role in the JWT claims today, so admin authority is an
-/// allow-list of Stellar addresses sourced from the `PERIGEE_ADMIN_STELLAR_ADDRESSES`
-/// environment variable (comma-separated). Requests from any other address are
-/// rejected with `401 Unauthorized`. (BE-044 / issue #281.)
+/// Admin authority is determined by the `Admin` role in JWT claims or the
+/// `PERIGEE_ADMIN_STELLAR_ADDRESSES` environment variable (comma-separated).
+/// Requests without admin authority are rejected with `403 Forbidden`.
 fn require_admin(user: &AuthenticatedUser) -> Result<(), AppError> {
-    let allowed = std::env::var("PERIGEE_ADMIN_STELLAR_ADDRESSES").unwrap_or_default();
-    let is_admin = allowed
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .any(|addr| addr == user.stellar_address);
-    if is_admin {
+    if user.is_admin() {
         Ok(())
     } else {
-        Err(AppError::Unauthorized(
+        crate::audit_log::log_security_event(
+            crate::audit_log::SecurityEventType::UnauthorizedAccess,
+            Some(&user.stellar_address),
+            None,
+            None,
+            Some("Admin privileges required but caller is not admin"),
+        );
+        Err(AppError::Forbidden(
             "Admin privileges required to perform this action".into(),
         ))
     }
@@ -504,6 +542,7 @@ fn require_admin(user: &AuthenticatedUser) -> Result<(), AppError> {
     responses(
         (status = 200, description = "Vault soft-deleted", body = VaultRecord),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden: Insufficient privileges or vault scope not authorized"),
         (status = 404, description = "Vault not found")
     ),
     security(
@@ -517,6 +556,7 @@ pub async fn soft_delete_vault_handler(
     Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
 ) -> Result<Json<VaultRecord>, AppError> {
+    user.authorize_vault_manage(&id)?;
     // Ownership is checked against the (possibly deleted) vault so the owner can
     // still delete their own vault.
     let vault = state.vault_store.get_including_deleted(&id).await?;
