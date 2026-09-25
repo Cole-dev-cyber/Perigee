@@ -1740,6 +1740,7 @@ impl utoipa::Modify for SecurityAddon {
         analyze, analyze_wasm, analyze_wasm_branches, optimize_limits, compare_handler, analyze_gas_golfing,
         auth::challenge_handler, auth::verify_handler, auth::refresh_handler,
         auth::revoke_handler, auth::emergency_pause_handler, auth::jwks_handler,
+        auth::issue_scoped_token_handler,
         fee_recommend, fee_history, fee_analytics,
         vault_store::create_vault_handler, vault_store::get_vault_handler,
         vault_store::update_vault_handler, vault_store::soft_delete_vault_handler,
@@ -1761,6 +1762,7 @@ impl utoipa::Modify for SecurityAddon {
         crate::wasm_branch_analysis::BranchType,
         crate::wasm_branch_analysis::BranchTypeBreakdown,
         crate::wasm_branch_analysis::PathResult,
+        auth::Role, auth::ScopedTokenRequest, auth::ScopedTokenResponse,
         auth::ChallengeRequest, auth::ChallengeResponse,
         auth::VerifyRequest, auth::VerifyResponse, auth::RefreshRequest,
         auth::RevokeResponse, auth::EmergencyPauseRequest, auth::EmergencyPauseResponse,
@@ -2468,6 +2470,8 @@ async fn main() {
         .route("/analyze/optimize-limits", post(optimize_limits))
         .route("/analyze/compare", post(compare_handler))
         .route("/analyze/gas-golfing", post(analyze_gas_golfing))
+        // Scoped token issuance for role- and vault-scoped delegation
+        .route("/auth/scoped-token", post(auth::issue_scoped_token_handler))
         // Vault records with tenant-scoped access (API-37)
         .route("/vaults", get(vault_store::list_vaults_handler).post(vault_store::create_vault_handler))
         .route(

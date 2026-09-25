@@ -51,11 +51,175 @@ enum RefreshTokenRecord {
     },
 }
 
+/// User roles for role-based access control (RBAC).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Admin,
+    Manager,
+    Operator,
+    Viewer,
+}
+
+impl Role {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::Manager => "manager",
+            Self::Operator => "operator",
+            Self::Viewer => "viewer",
+        }
+    }
+
+    pub fn is_admin(&self) -> bool {
+        matches!(self, Self::Admin)
+    }
+
+    pub fn can_write(&self) -> bool {
+        matches!(self, Self::Admin | Self::Manager | Self::Operator)
+    }
+
+    pub fn can_manage(&self) -> bool {
+        matches!(self, Self::Admin | Self::Manager)
+    }
+
+    pub fn can_read(&self) -> bool {
+        true
+    }
+}
+
+impl std::str::FromStr for Role {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "admin" => Ok(Role::Admin),
+            "manager" => Ok(Role::Manager),
+            "operator" => Ok(Role::Operator),
+            "viewer" => Ok(Role::Viewer),
+            _ => Err(()),
+        }
+    }
+}
+
+impl std::fmt::Display for Role {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Check if a Stellar address is configured as an admin via `PERIGEE_ADMIN_STELLAR_ADDRESSES`.
+pub fn is_admin_address(stellar_address: &str) -> bool {
+    let allowed = std::env::var("PERIGEE_ADMIN_STELLAR_ADDRESSES").unwrap_or_default();
+    allowed
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .any(|addr| addr == stellar_address)
+}
+
 /// Authenticated user extracted from JWT and injected into request extensions
-/// for tenant-scoped handlers.
+/// for role- and vault-scoped authorization.
 #[derive(Clone, Debug)]
 pub struct AuthenticatedUser {
     pub stellar_address: String,
+    pub role: Role,
+    pub roles: Vec<Role>,
+    pub vault_scopes: Vec<String>,
+}
+
+impl AuthenticatedUser {
+    pub fn new(stellar_address: String, role: Role, vault_scopes: Vec<String>) -> Self {
+        Self {
+            stellar_address,
+            roles: vec![role],
+            role,
+            vault_scopes,
+        }
+    }
+
+    pub fn is_admin(&self) -> bool {
+        self.role == Role::Admin
+            || self.roles.contains(&Role::Admin)
+            || is_admin_address(&self.stellar_address)
+    }
+
+    pub fn has_role(&self, role: Role) -> bool {
+        if self.is_admin() {
+            return true;
+        }
+        self.role == role || self.roles.contains(&role)
+    }
+
+    pub fn can_write_vaults(&self) -> bool {
+        self.is_admin() || self.role.can_write() || self.roles.iter().any(|r| r.can_write())
+    }
+
+    pub fn can_manage_vaults(&self) -> bool {
+        self.is_admin() || self.role.can_manage() || self.roles.iter().any(|r| r.can_manage())
+    }
+
+    pub fn can_access_all_vaults(&self) -> bool {
+        self.is_admin() || self.vault_scopes.is_empty() || self.vault_scopes.iter().any(|s| s == "*")
+    }
+
+    pub fn can_access_vault(&self, vault_id: &str) -> bool {
+        if self.can_access_all_vaults() {
+            return true;
+        }
+        self.vault_scopes.iter().any(|s| s == vault_id)
+    }
+
+    pub fn authorize_vault_read(&self, vault_id: &str) -> Result<(), AppError> {
+        if !self.can_access_vault(vault_id) {
+            log_security_event(
+                SecurityEventType::VaultAccessDenied,
+                Some(&self.stellar_address),
+                Some(vault_id),
+                None,
+                Some("Vault access denied: requested vault outside authorized scope"),
+            );
+            return Err(AppError::Forbidden(format!(
+                "Token is not authorized to access vault '{}'",
+                vault_id
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn authorize_vault_write(&self, vault_id: &str) -> Result<(), AppError> {
+        if !self.can_write_vaults() {
+            log_security_event(
+                SecurityEventType::VaultAccessDenied,
+                Some(&self.stellar_address),
+                Some(vault_id),
+                None,
+                Some("Vault access denied: insufficient role for write operations"),
+            );
+            return Err(AppError::Forbidden(format!(
+                "Role '{}' is not authorized to perform write operations on vaults",
+                self.role
+            )));
+        }
+        self.authorize_vault_read(vault_id)
+    }
+
+    pub fn authorize_vault_manage(&self, vault_id: &str) -> Result<(), AppError> {
+        if !self.can_manage_vaults() {
+            log_security_event(
+                SecurityEventType::VaultAccessDenied,
+                Some(&self.stellar_address),
+                Some(vault_id),
+                None,
+                Some("Vault access denied: insufficient role for management operations"),
+            );
+            return Err(AppError::Forbidden(format!(
+                "Role '{}' is not authorized to manage vaults",
+                self.role
+            )));
+        }
+        self.authorize_vault_read(vault_id)
+    }
 }
 
 const RATE_LIMIT_CAPACITY: f64 = 60.0;
@@ -204,6 +368,12 @@ pub struct ChallengeResponse {
 #[derive(Deserialize, ToSchema)]
 pub struct VerifyRequest {
     pub transaction: String,
+    /// Optional role to request in token claims. Admin role is only granted to addresses in PERIGEE_ADMIN_STELLAR_ADDRESSES.
+    #[serde(default)]
+    pub role: Option<Role>,
+    /// Optional vault scopes to constrain this token to specific vaults.
+    #[serde(default)]
+    pub vault_scopes: Option<Vec<String>>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -248,6 +418,14 @@ pub struct Claims {
     pub exp: u64,
     pub iat: u64,
     pub scopes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<Role>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roles: Option<Vec<Role>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_scopes: Option<Vec<String>>,
 }
 
 fn now_secs() -> u64 {
@@ -268,14 +446,30 @@ fn generate_refresh_token() -> String {
     BASE64_URL.encode(bytes)
 }
 
-fn encode_access_token(state: &AuthState, subject: &str) -> Result<String, AppError> {
+pub fn encode_access_token_with_role_and_vaults(
+    state: &AuthState,
+    subject: &str,
+    role: Option<Role>,
+    vault_scopes: Option<Vec<String>>,
+) -> Result<String, AppError> {
     let now = now_secs();
+    let assigned_role = role.unwrap_or_else(|| {
+        if is_admin_address(subject) {
+            Role::Admin
+        } else {
+            Role::Manager
+        }
+    });
     let claims = Claims {
         sub: subject.to_string(),
         iss: WEB_AUTH_DOMAIN.to_string(),
         iat: now,
         exp: now + ACCESS_TOKEN_EXPIRY_SECS,
         scopes: vec!["simulate".to_string()],
+        role: Some(assigned_role),
+        roles: Some(vec![assigned_role]),
+        vault_ids: vault_scopes.clone(),
+        vault_scopes,
     };
 
     let header = Header::new(Algorithm::RS256);
@@ -283,10 +477,24 @@ fn encode_access_token(state: &AuthState, subject: &str) -> Result<String, AppEr
         .map_err(|e| AppError::Internal(format!("JWT encode error: {e}")))
 }
 
+fn encode_access_token(state: &AuthState, subject: &str) -> Result<String, AppError> {
+    encode_access_token_with_role_and_vaults(state, subject, None, None)
+}
+
+/// Issue a short-lived access JWT plus a new refresh token (new rotation family) with role & vault scopes.
+pub(crate) fn issue_token_pair_with_scope(
+    state: &AuthState,
+    subject: &str,
+    role: Option<Role>,
+    vault_scopes: Option<Vec<String>>,
+) -> Result<VerifyResponse, AppError> {
+    let family_id = Uuid::new_v4().to_string();
+    issue_token_pair_in_family_with_scope(state, subject, &family_id, role, vault_scopes)
+}
+
 /// Issue a short-lived access JWT plus a new refresh token (new rotation family).
 pub(crate) fn issue_token_pair(state: &AuthState, subject: &str) -> Result<VerifyResponse, AppError> {
-    let family_id = Uuid::new_v4().to_string();
-    issue_token_pair_in_family(state, subject, &family_id)
+    issue_token_pair_with_scope(state, subject, None, None)
 }
 
 fn issue_token_pair_in_family(
@@ -294,7 +502,17 @@ fn issue_token_pair_in_family(
     subject: &str,
     family_id: &str,
 ) -> Result<VerifyResponse, AppError> {
-    let access_token = encode_access_token(state, subject)?;
+    issue_token_pair_in_family_with_scope(state, subject, family_id, None, None)
+}
+
+fn issue_token_pair_in_family_with_scope(
+    state: &AuthState,
+    subject: &str,
+    family_id: &str,
+    role: Option<Role>,
+    vault_scopes: Option<Vec<String>>,
+) -> Result<VerifyResponse, AppError> {
+    let access_token = encode_access_token_with_role_and_vaults(state, subject, role, vault_scopes)?;
     let refresh_token = generate_refresh_token();
     let token_hash = hash_refresh_token(&refresh_token);
     let expires_at = now_secs() + REFRESH_TOKEN_EXPIRY_SECS;
@@ -744,7 +962,25 @@ pub async fn verify_handler(
         }
     };
 
-    let tokens = match issue_token_pair(&state, &subject) {
+    let requested_role = if let Some(role) = payload.role {
+        if role == Role::Admin && !is_admin_address(&subject) {
+            log_security_event(
+                SecurityEventType::UnauthorizedAccess,
+                Some(&subject),
+                None,
+                None,
+                Some("Admin role requested by non-admin address"),
+            );
+            return Err(AppError::Forbidden(
+                "Admin role can only be granted to authorized admin addresses".into(),
+            ));
+        }
+        Some(role)
+    } else {
+        None
+    };
+
+    let tokens = match issue_token_pair_with_scope(&state, &subject, requested_role, payload.vault_scopes) {
         Ok(t) => t,
         Err(e) => {
             log_security_event(
@@ -968,12 +1204,136 @@ pub async fn auth_middleware(
         }
     }
 
+    let (role, roles) = if let Some(r) = token_data.claims.role {
+        let rs = token_data.claims.roles.unwrap_or_else(|| vec![r]);
+        (r, rs)
+    } else if let Some(rs) = token_data.claims.roles {
+        if let Some(&first) = rs.first() {
+            (first, rs)
+        } else if is_admin_address(&token_data.claims.sub) {
+            (Role::Admin, vec![Role::Admin])
+        } else {
+            (Role::Manager, vec![Role::Manager])
+        }
+    } else if is_admin_address(&token_data.claims.sub) {
+        (Role::Admin, vec![Role::Admin])
+    } else {
+        (Role::Manager, vec![Role::Manager])
+    };
+
+    let vault_scopes = token_data
+        .claims
+        .vault_scopes
+        .or(token_data.claims.vault_ids)
+        .unwrap_or_default();
+
     let mut req = req;
     req.extensions_mut().insert(AuthenticatedUser {
         stellar_address: token_data.claims.sub.clone(),
+        role,
+        roles,
+        vault_scopes,
     });
 
     Ok(next.run(req).await)
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct ScopedTokenRequest {
+    pub role: Role,
+    #[serde(default)]
+    pub vault_scopes: Vec<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct ScopedTokenResponse {
+    pub access_token: String,
+    pub token_type: String,
+    pub expires_in: u64,
+    pub role: Role,
+    pub vault_scopes: Vec<String>,
+}
+
+/// Issue a role- and vault-scoped access token for an agent, operator, or viewer.
+#[utoipa::path(
+    post,
+    path = "/auth/scoped-token",
+    request_body = ScopedTokenRequest,
+    responses(
+        (status = 200, description = "Role- and vault-scoped access token issued", body = ScopedTokenResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden: Insufficient privileges")
+    ),
+    security(
+        ("bearerAuth" = []),
+        ("jwt" = [])
+    ),
+    tag = "Auth"
+)]
+pub async fn issue_scoped_token_handler(
+    Extension(state): Extension<Arc<AuthState>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<ScopedTokenRequest>,
+) -> Result<Json<ScopedTokenResponse>, AppError> {
+    if state.is_verification_paused() {
+        return Err(AppError::Internal(
+            "Authentication is temporarily paused for emergency maintenance".into(),
+        ));
+    }
+
+    if !user.can_manage_vaults() {
+        return Err(AppError::Forbidden(
+            format!("Role '{}' is not authorized to issue scoped tokens", user.role)
+        ));
+    }
+
+    if payload.role == Role::Admin && !user.is_admin() {
+        return Err(AppError::Forbidden(
+            "Only administrators may issue Admin role tokens".into(),
+        ));
+    }
+
+    if !user.is_admin() && !payload.vault_scopes.is_empty() {
+        for v in &payload.vault_scopes {
+            if v == "*" && !user.can_access_all_vaults() {
+                return Err(AppError::Forbidden(
+                    "Cannot issue wildcard vault token without global vault permissions".into(),
+                ));
+            }
+            if v != "*" && !user.can_access_vault(v) {
+                return Err(AppError::Forbidden(
+                    format!("Cannot issue token for vault '{}' outside your authorized scope", v),
+                ));
+            }
+        }
+    }
+
+    let token = encode_access_token_with_role_and_vaults(
+        &state,
+        &user.stellar_address,
+        Some(payload.role),
+        Some(payload.vault_scopes.clone()),
+    )?;
+
+    log_security_event(
+        SecurityEventType::TokenRefreshed,
+        Some(&user.stellar_address),
+        None,
+        None,
+        Some(&format!(
+            "Issued scoped token with role '{}' and {} vault scopes",
+            payload.role,
+            payload.vault_scopes.len()
+        )),
+    );
+
+    Ok(Json(ScopedTokenResponse {
+        access_token: token,
+        token_type: "Bearer".to_string(),
+        expires_in: ACCESS_TOKEN_EXPIRY_SECS,
+        role: payload.role,
+        vault_scopes: payload.vault_scopes,
+    }))
 }
 
 #[derive(Serialize, ToSchema)]
